@@ -3,14 +3,14 @@ from discord import ui
 from discord.ext import tasks
 import logging
 import time
+import asyncio
 from datetime import datetime
 
-# Import dengan absolute path
-from.balance_manager import BalanceManagerService
-from.product_manager import ProductManagerService
-from.trx import TransactionManager
-from.live_modals import BuyModal, SetGrowIDModal
-from.constants import COOLDOWN_SECONDS
+from .balance_manager import BalanceManagerService
+from .product_manager import ProductManagerService
+from .trx import TransactionManager
+from .live_modals import BuyModal, SetGrowIDModal
+from .constants import COOLDOWN_SECONDS
 
 class StockView(ui.View):
     def __init__(self, bot):
@@ -54,8 +54,9 @@ class StockView(ui.View):
             if user_id in self._cooldowns:
                 remaining = COOLDOWN_SECONDS - (current_time - self._cooldowns[user_id])
                 if remaining > 0:
-                    await interaction.response.send_message(
-                        f"⏳ Please wait {remaining:.1f} seconds...",
+                    await self._safe_interaction_response(
+                        interaction,
+                        content=f"⏳ Please wait {remaining:.1f} seconds...",
                         ephemeral=True
                     )
                     return False
@@ -83,12 +84,26 @@ class StockView(ui.View):
 
     async def _safe_interaction_response(self, interaction: discord.Interaction, **kwargs):
         try:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(**kwargs)
-            else:
-                await interaction.followup.send(**kwargs)
+            # Tambahkan delay kecil untuk menghindari race condition
+            await asyncio.sleep(0.1)
+            
+            if interaction.is_expired():
+                self.logger.debug(f"Interaction {interaction.id} has expired")
+                return
+                
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(**kwargs)
+                else:
+                    await interaction.followup.send(**kwargs)
+            except discord.errors.InteractionResponded:
+                try:
+                    await interaction.followup.send(**kwargs)
+                except Exception as e:
+                    self.logger.error(f"Error sending followup: {e}")
+                    
         except Exception as e:
-            self.logger.error(f"Error sending interaction response: {e}")
+            self.logger.error(f"Error in _safe_interaction_response: {e}")
 
     @discord.ui.button(
         label="Balance",
