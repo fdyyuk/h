@@ -6,7 +6,9 @@ from discord import ui
 from discord.ext import commands
 
 from .constants import Balance
-from .balance_manager import BalanceManagerService
+from.balance_manager import BalanceManagerService
+from.product_manager import ProductManagerService
+from.trx import TransactionManager
 from database import get_connection
 
 class SetGrowIDModal(ui.Modal, title="Set GrowID"):
@@ -91,19 +93,19 @@ class BuyModal(ui.Modal, title="Buy Product"):
     async def on_submit(self, interaction: discord.Interaction):
         try:
             await interaction.response.defer(ephemeral=True)
-    
+
             # Get user's GrowID
             growid = await self.balance_manager.get_growid(interaction.user.id)
             if not growid:
                 await interaction.followup.send("❌ Please set your GrowID first!", ephemeral=True)
                 return
-    
+
             # Validate product
             product = await self.product_manager.get_product(self.code.value)
             if not product:
                 await interaction.followup.send("❌ Invalid product code!", ephemeral=True)
                 return
-    
+
             # Validate quantity
             try:
                 quantity = int(self.quantity.value)
@@ -112,7 +114,7 @@ class BuyModal(ui.Modal, title="Buy Product"):
             except ValueError:
                 await interaction.followup.send("❌ Invalid quantity!", ephemeral=True)
                 return
-    
+
             # Process purchase
             try:
                 result = await self.trx_manager.process_purchase(
@@ -123,7 +125,7 @@ class BuyModal(ui.Modal, title="Buy Product"):
             except Exception as e:
                 await interaction.followup.send(f"❌ {str(e)}", ephemeral=True)
                 return
-    
+
             embed = discord.Embed(
                 title="✅ Purchase Successful",
                 color=discord.Color.green(),
@@ -133,14 +135,14 @@ class BuyModal(ui.Modal, title="Buy Product"):
             embed.add_field(name="Quantity", value=str(quantity), inline=True)
             embed.add_field(name="Total Price", value=f"{result['total_price']:,} WL", inline=True)
             embed.add_field(name="New Balance", value=f"{result['new_balance']:,} WL", inline=False)
-    
+
             # Send purchase result via DM
             dm_sent = await self.trx_manager.send_purchase_result(
                 user=interaction.user,
                 items=result['items'],
                 product_name=result['product_name']
             )
-    
+
             if dm_sent:
                 embed.add_field(
                     name="Purchase Details",
@@ -153,17 +155,17 @@ class BuyModal(ui.Modal, title="Buy Product"):
                     value="⚠️ Could not send DM. Please enable DMs from server members to receive purchase details.",
                     inline=False
                 )
-    
+
             content_msg = "**Your Items:**\n"
             for item in result['items']:
                 content_msg += f"```{item['content']}```\n"
-    
+
             await interaction.followup.send(
                 embed=embed,
                 content=content_msg if not dm_sent else None,
                 ephemeral=True
             )
-    
+
         except Exception as e:
             self.logger.error(f"Error in BuyModal: {e}")
             await interaction.followup.send("❌ An error occurred", ephemeral=True)
