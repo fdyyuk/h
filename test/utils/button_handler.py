@@ -15,26 +15,35 @@ class ButtonHandler:
         """Handle button interactions"""
         # Skip jika interaksi sudah diproses
         if interaction.id in self._handled_interactions:
+            logger.debug(f"Skipping already handled interaction: {interaction.id}")
             return
             
         try:
-            # Tandai interaksi sudah diproses
+            # Tandai interaksi sudah diproses di awal
             self._handled_interactions.add(interaction.id)
             button_id = interaction.data.get('custom_id', '')
 
             # Fungsi helper untuk mengirim respons dengan aman
             async def safe_response(content=None, **kwargs):
                 try:
+                    # Cek apakah interaksi masih valid
+                    if interaction.is_expired():
+                        logger.debug(f"Interaction {interaction.id} has expired")
+                        return False
+
                     if not interaction.response.is_done():
                         if content:
                             await interaction.response.send_message(content, **kwargs)
-                        else:
-                            return False
+                            return True
+                        return False
                     else:
-                        if content:
+                        # Hanya kirim followup jika benar-benar perlu
+                        if content and not interaction.message:
                             await interaction.followup.send(content, **kwargs)
                         return False
-                    return True
+                except discord.errors.InteractionResponded:
+                    logger.debug(f"Interaction {interaction.id} already responded to")
+                    return False
                 except Exception as e:
                     logger.error(f"Error in safe_response: {e}")
                     return False
@@ -71,7 +80,8 @@ class ButtonHandler:
 
         except Exception as e:
             logger.error(f"Error handling button {button_id}: {e}")
-            await safe_response("❌ An error occurred", ephemeral=True)
+            if not interaction.response.is_done():
+                await safe_response("❌ An error occurred", ephemeral=True)
             
     async def handle_balance(self, interaction: discord.Interaction) -> bool:
         try:
