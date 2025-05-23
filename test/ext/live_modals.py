@@ -1,11 +1,67 @@
-import discord
-from discord import ui
 import logging
 from datetime import datetime
 
+import discord
+from discord import ui
+from discord.ext import commands
+
+from .constants import Balance
 from .balance_manager import BalanceManagerService
-from .product_manager import ProductManagerService
-from .trx import TransactionManager
+from database import get_connection
+
+class SetGrowIDModal(ui.Modal, title="Set GrowID"):
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+        self.logger = logging.getLogger("SetGrowIDModal")
+        self.balance_manager = BalanceManagerService(bot)
+
+    growid = ui.TextInput(
+        label="GrowID",
+        placeholder="Enter your GrowID...",
+        min_length=3,
+        max_length=20,
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            await interaction.response.defer(ephemeral=True)
+            
+            # Get existing GrowID
+            old_growid = await self.balance_manager.get_growid(interaction.user.id)
+            
+            if old_growid:
+                # Update existing GrowID
+                if await self.balance_manager.update_user_growid(interaction.user.id, self.growid.value):
+                    embed = discord.Embed(
+                        title="✅ GrowID Updated Successfully",
+                        description=f"Your GrowID has been changed from `{old_growid}` to `{self.growid.value}`\nYour balance has been transferred.",
+                        color=discord.Color.green(),
+                        timestamp=datetime.utcnow()
+                    )
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+                    self.logger.info(f"Updated GrowID for Discord user {interaction.user.id} from {old_growid} to {self.growid.value}")
+                else:
+                    await interaction.followup.send("❌ Failed to update GrowID", ephemeral=True)
+            else:
+                # Register new GrowID
+                if await self.balance_manager.register_user(interaction.user.id, self.growid.value):
+                    embed = discord.Embed(
+                        title="✅ GrowID Set Successfully",
+                        description=f"Your GrowID has been set to: `{self.growid.value}`",
+                        color=discord.Color.green(),
+                        timestamp=datetime.utcnow()
+                    )
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+                    self.logger.info(f"Set GrowID for Discord user {interaction.user.id} to {self.growid.value}")
+                else:
+                    await interaction.followup.send("❌ Failed to set GrowID", ephemeral=True)
+
+        except Exception as e:
+            self.logger.error(f"Error in SetGrowIDModal: {e}")
+            await interaction.followup.send("❌ An error occurred", ephemeral=True)
+
 
 class BuyModal(ui.Modal, title="Buy Product"):
     def __init__(self, bot):
@@ -110,39 +166,4 @@ class BuyModal(ui.Modal, title="Buy Product"):
     
         except Exception as e:
             self.logger.error(f"Error in BuyModal: {e}")
-            await interaction.followup.send("❌ An error occurred", ephemeral=True)
-
-class SetGrowIDModal(ui.Modal, title="Set GrowID"):
-    def __init__(self, bot):
-        super().__init__()
-        self.bot = bot
-        self.logger = logging.getLogger("SetGrowIDModal")
-        self.balance_manager = BalanceManagerService(bot)
-
-    growid = ui.TextInput(
-        label="GrowID",
-        placeholder="Enter your GrowID...",
-        min_length=3,
-        max_length=20,
-        required=True
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            await interaction.response.defer(ephemeral=True)
-            
-            if await self.balance_manager.register_user(interaction.user.id, self.growid.value):
-                embed = discord.Embed(
-                    title="✅ GrowID Set Successfully",
-                    description=f"Your GrowID has been set to: `{self.growid.value}`",
-                    color=discord.Color.green(),
-                    timestamp=datetime.utcnow()
-                )
-                await interaction.followup.send(embed=embed, ephemeral=True)
-                self.logger.info(f"Set GrowID for Discord user {interaction.user.id} to {self.growid.value}")
-            else:
-                await interaction.followup.send("❌ Failed to set GrowID", ephemeral=True)
-
-        except Exception as e:
-            self.logger.error(f"Error in SetGrowIDModal: {e}")
             await interaction.followup.send("❌ An error occurred", ephemeral=True)
