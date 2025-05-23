@@ -114,7 +114,7 @@ class AdminCog(commands.Cog, name="Admin"):
                 ],
                 "Balance Management": [
                     "`addbal <growid> <amount> <WL/DL/BGL>`\nAdd balance",
-                    "`removebal <growid> <amount> <WL/DL/BGL>`\nRemove balance",
+                    "`reducebal <growid> <amount> <WL/DL/BGL>`\nRemove balance",
                     "`checkbal <growid>`\nCheck balance",
                     "`resetuser <growid>`\nReset balance"
                 ],
@@ -314,84 +314,89 @@ class AdminCog(commands.Cog, name="Admin"):
     
 
 
-    @commands.command(name="removebal")
-    async def remove_balance(self, ctx, growid: str, amount: int, currency: str):
-        """Remove balance from user"""
-        if not await self._check_admin(ctx):
-            return
-            
-        try:
-            if currency not in CURRENCY_RATES:  # Removed ()
-                await ctx.send(f"❌ Invalid currency. Use: {', '.join(CURRENCY_RATES.keys())}")
-                return
-
-            if amount <= 0:
-                await ctx.send("❌ Amount must be positive!")
-                return
-
-            # Convert to WLs and make negative for removal
-            wls = -(amount if currency == "WL" else amount * CURRENCY_RATES[currency])
-            
-            new_balance = await self.balance_service.update_balance(
-                growid=growid,  # Removed ()
-                wl=wls,
-                details=f"Removed by admin {ctx.author}",
-                transaction_type=TRANSACTION_ADMIN_REMOVE
-            )
-
-            embed = discord.Embed(
-                title="✅ Balance Removed",
-                color=discord.Color.red(),
-                timestamp=datetime.utcnow()
-            )
-            embed.add_field(name="GrowID", value=growid, inline=True)
-            embed.add_field(name="Removed", value=f"{amount:,} {currency}", inline=True)
-            embed.add_field(name="New Balance", value=new_balance.format(), inline=False)
-            embed.set_footer(text=f"Removed by {ctx.author}")
-
-            await ctx.send(embed=embed)
-            self.logger.info(f"Balance removed from {growid} by {ctx.author}")
-            
-        except Exception as e:
-            await ctx.send(f"❌ Error: {str(e)}")
-            self.logger.error(f"Error removing balance: {e}")
-
-    @commands.command(name='checkbal')
-    async def check_balance(self, ctx, growid: str = None):
-        """Check balance dari user
-        Usage: !checkbal <growid>
-        Example: !checkbal STEVE
+    @commands.command(name="reducebal")
+    async def reduce_balance(self, ctx, growid: str, amount: int):
+        """Reduce user's balance
+        Usage: !reducebal <growid> <amount>
+        Example: !reducebal STEVE 100000
         """
         if not await self._check_admin(ctx):
             return
                 
         try:
-            if not growid:
-                await ctx.send("❌ Please specify a GrowID!")
+            if amount <= 0:
+                await ctx.send("❌ Amount must be positive!")
                 return
     
-            # Get balance
-            balance = await self.balance_service.get_balance(growid)
-            if not balance:
-                await ctx.send(f"❌ No balance found for GrowID: {growid}")
+            # Get current balance first
+            current_balance = await self.balance_service.get_balance(growid)
+            if not current_balance:
+                await ctx.send(f"❌ User {growid} not found!")
                 return
-    
-            # Create embed
-            embed = discord.Embed(
-                title="💰 Balance Information",
-                color=discord.Color.blue(),
-                timestamp=datetime.utcnow()  # Gunakan datetime.utcnow() untuk timestamp
+                
+            # Make amount negative for reduction
+            wls = -amount
+                
+            new_balance = await self.balance_service.update_balance(
+                growid=growid,
+                wl=wls,
+                details=f"Reduced by admin {ctx.author}",
+                transaction_type=TRANSACTION_ADMIN_REMOVE
             )
-            
-            embed.add_field(name="GrowID", value=growid, inline=False)
-            embed.add_field(name="Balance", value=balance.format(), inline=False)
-            embed.set_footer(text=f"Checked by {ctx.author}")
-            
-            await ctx.send(embed=embed)
     
+            embed = discord.Embed(
+                title="✅ Balance Reduced",
+                color=discord.Color.red(),
+                timestamp=datetime.utcnow()
+            )
+            embed.add_field(name="GrowID", value=growid, inline=True)
+            embed.add_field(name="Reduced", value=f"{amount:,} WL", inline=True)
+            embed.add_field(name="New Balance", value=new_balance.format(), inline=False)
+            embed.set_footer(text=f"Reduced by {ctx.author}")
+    
+            await ctx.send(embed=embed)
+            self.logger.info(f"Balance reduced from {growid} by {ctx.author}: -{amount} WL")
+                
         except Exception as e:
-            self.logger.error(f"Error checking balance: {e}")
-            await ctx.send("❌ An error occurred while checking balance!")
+            await ctx.send(f"❌ Error: {str(e)}")
+            self.logger.error(f"Error reducing balance: {e}")
+    
+        @commands.command(name='checkbal')
+        async def check_balance(self, ctx, growid: str = None):
+            """Check balance dari user
+            Usage: !checkbal <growid>
+            Example: !checkbal STEVE
+            """
+            if not await self._check_admin(ctx):
+                return
+                    
+            try:
+                if not growid:
+                    await ctx.send("❌ Please specify a GrowID!")
+                    return
+        
+                # Get balance
+                balance = await self.balance_service.get_balance(growid)
+                if not balance:
+                    await ctx.send(f"❌ No balance found for GrowID: {growid}")
+                    return
+        
+                # Create embed
+                embed = discord.Embed(
+                    title="💰 Balance Information",
+                    color=discord.Color.blue(),
+                    timestamp=datetime.utcnow()  # Gunakan datetime.utcnow() untuk timestamp
+                )
+                
+                embed.add_field(name="GrowID", value=growid, inline=False)
+                embed.add_field(name="Balance", value=balance.format(), inline=False)
+                embed.set_footer(text=f"Checked by {ctx.author}")
+                
+                await ctx.send(embed=embed)
+        
+            except Exception as e:
+                self.logger.error(f"Error checking balance: {e}")
+                await ctx.send("❌ An error occurred while checking balance!")
     
         @commands.command(name="resetuser")
         async def reset_user(self, ctx, growid: str):
