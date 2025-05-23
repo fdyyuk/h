@@ -128,40 +128,70 @@ class ValidationError(Exception):
     """Custom exception for validation-related errors"""
     pass
 
-# Balance Class
+# Balance Class dengan Perbaikan
 class Balance:
     def __init__(self, wl: int = 0, dl: int = 0, bgl: int = 0):
-        self.wl = wl
-        self.dl = dl
-        self.bgl = bgl
+        try:
+            self.wl = int(wl) if wl is not None else 0
+            self.dl = int(dl) if dl is not None else 0
+            self.bgl = int(bgl) if bgl is not None else 0
+        except (ValueError, TypeError):
+            self.wl = 0
+            self.dl = 0
+            self.bgl = 0
         self.total_wls = self.to_wls()
     
     def format(self) -> str:
         """Format balance in human readable string"""
-        parts = []
-        if self.bgl > 0:
-            parts.append(f"{self.bgl:,} BGL")
-        if self.dl > 0:
-            parts.append(f"{self.dl:,} DL")
-        if self.wl > 0:
-            parts.append(f"{self.wl:,} WL")
-        return " + ".join(parts) if parts else "0 WL"
+        try:
+            parts = []
+            if self.bgl > 0:
+                parts.append(f"{self.bgl:,} BGL")
+            if self.dl > 0:
+                parts.append(f"{self.dl:,} DL")
+            if self.wl > 0:
+                parts.append(f"{self.wl:,} WL")
+            return " + ".join(parts) if parts else "0 WL"
+        except Exception:
+            # Jika format error, kembalikan format simple
+            return f"{self.to_wls():,} WL"
     
     def to_wls(self) -> int:
         """Convert balance to total WLs"""
-        return self.wl + (self.dl * CURRENCY_RATES['DL']) + (self.bgl * CURRENCY_RATES['BGL'])
+        try:
+            return (self.wl or 0) + ((self.dl or 0) * CURRENCY_RATES['DL']) + ((self.bgl or 0) * CURRENCY_RATES['BGL'])
+        except Exception:
+            return 0
     
     @classmethod
     def from_wls(cls, total_wls: int) -> 'Balance':
         """Create Balance instance from total WLs"""
-        bgl = total_wls // CURRENCY_RATES['BGL']
-        remaining = total_wls % CURRENCY_RATES['BGL']
-        dl = remaining // CURRENCY_RATES['DL']
-        wl = remaining % CURRENCY_RATES['DL']
-        return cls(wl=wl, dl=dl, bgl=bgl)
+        try:
+            total_wls = int(total_wls) if total_wls is not None else 0
+            bgl = total_wls // CURRENCY_RATES['BGL']
+            remaining = total_wls % CURRENCY_RATES['BGL']
+            dl = remaining // CURRENCY_RATES['DL']
+            wl = remaining % CURRENCY_RATES['DL']
+            return cls(wl=wl, dl=dl, bgl=bgl)
+        except Exception:
+            return cls(wl=0, dl=0, bgl=0)
 
     def __str__(self) -> str:
         return self.format()
 
     def __repr__(self) -> str:
         return f"Balance(wl={self.wl}, dl={self.dl}, bgl={self.bgl})"
+        
+    def __format__(self, format_spec: str = "") -> str:
+        """Format balance when using format() or f-strings"""
+        try:
+            if not format_spec:
+                return self.format()
+            elif format_spec == 'wl':
+                return f"{self.to_wls():,} WL"
+            elif format_spec == 'full':
+                return f"{self.bgl:,} BGL + {self.dl:,} DL + {self.wl:,} WL"
+            else:
+                return self.format()
+        except Exception:
+            return "0 WL"
