@@ -5,63 +5,81 @@ import logging
 import time
 from datetime import datetime
 
-from .balance_manager import BalanceManagerService
-from .product_manager import ProductManagerService
-from .trx import TransactionManager
-from .live_modals import BuyModal, SetGrowIDModal
-from .constants import COOLDOWN_SECONDS
+# Import dengan absolute path
+from.balance_manager import BalanceManagerService
+from.product_manager import ProductManagerService
+from.trx import TransactionManager
+from.live_modals import BuyModal, SetGrowIDModal
+from.constants import COOLDOWN_SECONDS
 
 class StockView(ui.View):
     def __init__(self, bot):
         super().__init__(timeout=None)
         self.bot = bot
-        self.balance_manager = BalanceManagerService(bot)
-        self.product_manager = ProductManagerService(bot)
-        self.trx_manager = TransactionManager(bot)
+        self.logger = logging.getLogger("StockView")
+        
+        try:
+            self.balance_manager = BalanceManagerService(bot)
+            self.product_manager = ProductManagerService(bot)
+            self.trx_manager = TransactionManager(bot)
+        except Exception as e:
+            self.logger.error(f"Error initializing services: {e}")
+            raise
+            
         self._cooldowns = {}
         self._interaction_locks = {}
-        self.logger = logging.getLogger("StockView")
         self._cache_cleanup.start()
 
     @tasks.loop(minutes=5)
     async def _cache_cleanup(self):
         """Cleanup expired cache entries"""
-        current_time = time.time()
-        self._cooldowns = {
-            k: v for k, v in self._cooldowns.items()
-            if current_time - v < COOLDOWN_SECONDS
-        }
-        self._interaction_locks = {
-            k: v for k, v in self._interaction_locks.items()
-            if current_time - v < 1.0
-        }
+        try:
+            current_time = time.time()
+            self._cooldowns = {
+                k: v for k, v in self._cooldowns.items()
+                if current_time - v < COOLDOWN_SECONDS
+            }
+            self._interaction_locks = {
+                k: v for k, v in self._interaction_locks.items()
+                if current_time - v < 1.0
+            }
+        except Exception as e:
+            self.logger.error(f"Error in cache cleanup: {e}")
 
     async def _check_cooldown(self, interaction: discord.Interaction) -> bool:
-        user_id = interaction.user.id
-        current_time = time.time()
-        
-        if user_id in self._cooldowns:
-            remaining = COOLDOWN_SECONDS - (current_time - self._cooldowns[user_id])
-            if remaining > 0:
-                await interaction.response.send_message(
-                    f"⏳ Please wait {remaining:.1f} seconds...",
-                    ephemeral=True
-                )
-                return False
-        
-        self._cooldowns[user_id] = current_time
-        return True
+        try:
+            user_id = interaction.user.id
+            current_time = time.time()
+            
+            if user_id in self._cooldowns:
+                remaining = COOLDOWN_SECONDS - (current_time - self._cooldowns[user_id])
+                if remaining > 0:
+                    await interaction.response.send_message(
+                        f"⏳ Please wait {remaining:.1f} seconds...",
+                        ephemeral=True
+                    )
+                    return False
+            
+            self._cooldowns[user_id] = current_time
+            return True
+        except Exception as e:
+            self.logger.error(f"Error checking cooldown: {e}")
+            return False
 
     async def _check_interaction_lock(self, interaction: discord.Interaction) -> bool:
-        user_id = interaction.user.id
-        current_time = time.time()
-        
-        if user_id in self._interaction_locks:
-            if current_time - self._interaction_locks[user_id] < 1.0:
-                return False
-        
-        self._interaction_locks[user_id] = current_time
-        return True
+        try:
+            user_id = interaction.user.id
+            current_time = time.time()
+            
+            if user_id in self._interaction_locks:
+                if current_time - self._interaction_locks[user_id] < 1.0:
+                    return False
+            
+            self._interaction_locks[user_id] = current_time
+            return True
+        except Exception as e:
+            self.logger.error(f"Error checking interaction lock: {e}")
+            return False
 
     async def _safe_interaction_response(self, interaction: discord.Interaction, **kwargs):
         try:
@@ -83,6 +101,15 @@ class StockView(ui.View):
             return
 
         try:
+            if not hasattr(self, 'balance_manager'):
+                self.logger.error("BalanceManagerService not initialized")
+                await self._safe_interaction_response(
+                    interaction,
+                    content="❌ Service temporarily unavailable",
+                    ephemeral=True
+                )
+                return
+
             await interaction.response.defer(ephemeral=True)
             
             growid = await self.balance_manager.get_growid(interaction.user.id)
@@ -120,6 +147,15 @@ class StockView(ui.View):
             return
 
         try:
+            if not hasattr(self, 'product_manager'):
+                self.logger.error("ProductManagerService not initialized")
+                await self._safe_interaction_response(
+                    interaction,
+                    content="❌ Service temporarily unavailable",
+                    ephemeral=True
+                )
+                return
+
             growid = await self.balance_manager.get_growid(interaction.user.id)
             if not growid:
                 await interaction.response.send_message(
@@ -172,6 +208,15 @@ class StockView(ui.View):
             return
 
         try:
+            if not hasattr(self, 'balance_manager'):
+                self.logger.error("BalanceManagerService not initialized")
+                await self._safe_interaction_response(
+                    interaction,
+                    content="❌ Service temporarily unavailable",
+                    ephemeral=True
+                )
+                return
+
             await interaction.response.defer(ephemeral=True)
             
             growid = await self.balance_manager.get_growid(interaction.user.id)
@@ -203,6 +248,15 @@ class StockView(ui.View):
             return
 
         try:
+            if not hasattr(self, 'product_manager'):
+                self.logger.error("ProductManagerService not initialized")
+                await self._safe_interaction_response(
+                    interaction,
+                    content="❌ Service temporarily unavailable",
+                    ephemeral=True
+                )
+                return
+
             await interaction.response.defer(ephemeral=True)
             
             world_info = await self.product_manager.get_world_info()
