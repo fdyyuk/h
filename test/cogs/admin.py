@@ -356,9 +356,9 @@ class AdminCog(commands.Cog, name="Admin"):
             await ctx.send(f"❌ Error: {str(e)}")
             self.logger.error(f"Error removing balance: {e}")
 
-    @commands.command(name="checkbal")
-    async def check_balance(self, ctx, growid: str):
-        """Check user balance
+    @commands.command(name='checkbal')
+    async def check_balance(self, ctx, growid: str = None):
+        """Check balance dari user
         Usage: !checkbal <growid>
         Example: !checkbal STEVE
         """
@@ -366,78 +366,75 @@ class AdminCog(commands.Cog, name="Admin"):
             return
                 
         try:
+            if not growid:
+                await ctx.send("❌ Please specify a GrowID!")
+                return
+    
             # Get balance
             balance = await self.balance_service.get_balance(growid)
-            if balance is None:
-                await ctx.send(f"❌ User {growid} tidak ditemukan!")
+            if not balance:
+                await ctx.send(f"❌ No balance found for GrowID: {growid}")
                 return
     
-            # Get recent transactions
-            transactions = await self.trx_manager.get_transaction_history(growid, limit=5)
-    
+            # Create embed
             embed = discord.Embed(
-                title=f"👤 Informasi User - {growid}",
+                title="💰 Balance Information",
                 color=discord.Color.blue(),
-                timestamp=datetime.utcnow()
+                timestamp=datetime.utcnow()  # Gunakan datetime.utcnow() untuk timestamp
             )
-            embed.add_field(name="Current Balance", value=f"{balance:,} WL", inline=False)
             
-            if transactions:
-                recent_tx = "\n".join([
-                    f"• {tx['type']} - {tx['timestamp']}: {tx['amount']:,} WL - {tx['details']}"
-                    for tx in transactions
-                ])
-                embed.add_field(name="Recent Transactions", value=recent_tx, inline=False)
-    
+            embed.add_field(name="GrowID", value=growid, inline=False)
+            embed.add_field(name="Balance", value=balance.format(), inline=False)
             embed.set_footer(text=f"Checked by {ctx.author}")
-            await ctx.send(embed=embed)
-                
-        except Exception as e:
-            await ctx.send(f"❌ Error: {str(e)}")
-            self.logger.error(f"Error checking balance: {e}")
-
-    @commands.command(name="resetuser")
-    async def reset_user(self, ctx, growid: str):
-        """Reset user balance"""
-        if not await self._check_admin(ctx):
-            return
-
-        try:
-            if not await self._confirm_action(ctx, f"Are you sure you want to reset {growid}'s balance?"):
-                await ctx.send("❌ Operation cancelled.")
-                return
-
-            current_balance = await self.balance_service.get_balance(growid)  # Removed ()
-            if not current_balance:
-                await ctx.send(f"❌ User {growid} not found!")
-                return
-
-            # Reset balance
-            new_balance = await self.balance_service.update_balance(
-                growid=growid,
-                wl=-current_balance.wl,
-                dl=-current_balance.dl,
-                bgl=-current_balance.bgl,
-                details=f"Balance reset by admin {ctx.author}",
-                transaction_type=TRANSACTION_ADMIN_RESET
-            )
-
-            embed = discord.Embed(
-                title="✅ Balance Reset",
-                description=f"User {growid}'s balance has been reset.",
-                color=discord.Color.red(),
-                timestamp=datetime.utcnow()
-            )
-            embed.add_field(name="Previous Balance", value=current_balance.format(), inline=False)
-            embed.add_field(name="New Balance", value=new_balance.format(), inline=False)
-            embed.set_footer(text=f"Reset by {ctx.author}")
-
-            await ctx.send(embed=embed)
-            self.logger.info(f"Balance reset for {growid} by {ctx.author}")
             
+            await ctx.send(embed=embed)
+    
         except Exception as e:
-            await ctx.send(f"❌ Error: {str(e)}")
-            self.logger.error(f"Error resetting user: {e}")
+            self.logger.error(f"Error checking balance: {e}")
+            await ctx.send("❌ An error occurred while checking balance!")
+    
+        @commands.command(name="resetuser")
+        async def reset_user(self, ctx, growid: str):
+            """Reset user balance"""
+            if not await self._check_admin(ctx):
+                return
+    
+            try:
+                if not await self._confirm_action(ctx, f"Are you sure you want to reset {growid}'s balance?"):
+                    await ctx.send("❌ Operation cancelled.")
+                    return
+    
+                current_balance = await self.balance_service.get_balance(growid)  # Removed ()
+                if not current_balance:
+                    await ctx.send(f"❌ User {growid} not found!")
+                    return
+    
+                # Reset balance
+                new_balance = await self.balance_service.update_balance(
+                    growid=growid,
+                    wl=-current_balance.wl,
+                    dl=-current_balance.dl,
+                    bgl=-current_balance.bgl,
+                    details=f"Balance reset by admin {ctx.author}",
+                    transaction_type=TRANSACTION_ADMIN_RESET
+                )
+    
+                embed = discord.Embed(
+                    title="✅ Balance Reset",
+                    description=f"User {growid}'s balance has been reset.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.utcnow()
+                )
+                embed.add_field(name="Previous Balance", value=current_balance.format(), inline=False)
+                embed.add_field(name="New Balance", value=new_balance.format(), inline=False)
+                embed.set_footer(text=f"Reset by {ctx.author}")
+    
+                await ctx.send(embed=embed)
+                self.logger.info(f"Balance reset for {growid} by {ctx.author}")
+                
+            except Exception as e:
+                await ctx.send(f"❌ Error: {str(e)}")
+                self.logger.error(f"Error resetting user: {e}")
 
     @commands.command(name="systeminfo")
     async def system_info(self, ctx):
