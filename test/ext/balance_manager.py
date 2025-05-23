@@ -123,6 +123,102 @@ class BalanceManagerService:
                 if conn:
                     conn.close()
 
+    async def update_user_growid(self, discord_id: str, new_growid: str) -> bool:
+        async with await self._get_lock(f"update_growid_{discord_id}"):
+            conn = None
+            try:
+                conn = get_connection()
+                cursor = conn.cursor()
+                
+                # Get old GrowID
+                cursor.execute(
+                    "SELECT growid FROM user_growid WHERE discord_id = ? COLLATE binary",
+                    (str(discord_id),)
+                )
+                result = cursor.fetchone()
+                old_growid = result['growid'] if result else None
+                
+                if old_growid:
+                    # Begin transaction
+                    conn.execute("BEGIN TRANSACTION")
+                    
+                    # Get old balance
+                    cursor.execute(
+                        """
+                        SELECT balance_wl, balance_dl, balance_bgl 
+                        FROM users 
+                        WHERE growid = ? COLLATE binary
+                        """,
+                        (old_growid,)
+                    )
+                    old_balance = cursor.fetchone()
+                    
+                    if old_balance:
+                        # Insert or update new GrowID with old balance
+                        cursor.execute(
+                            """
+                            INSERT OR REPLACE INTO users 
+                            (growid, balance_wl, balance_dl, balance_bgl) 
+                            VALUES (?, ?, ?, ?)
+                            """,
+                            (
+                                new_growid, 
+                                old_balance['balance_wl'],
+                                old_balance['balance_dl'],
+                                old_balance['balance_bgl']
+                            )
+                        )
+                        
+                        # Update user_growid mapping
+                        cursor.execute(
+                            "UPDATE user_growid SET growid = ? WHERE discord_id = ?",
+                            (new_growid, str(discord_id))
+                        )
+                        
+                        # Record transaction for history
+                        cursor.execute(
+                            """
+                            INSERT INTO transactions 
+                            (growid, type, details, old_balance, new_balance) 
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (
+                                new_growid,
+                                'GROWID_CHANGE',
+                                f"Changed from {old_growid}",
+                                f"{old_balance['balance_wl']} WL",
+                                f"{old_balance['balance_wl']} WL"
+                            )
+                        )
+                        
+                        # Remove old GrowID data
+                        cursor.execute(
+                            "DELETE FROM users WHERE growid = ?",
+                            (old_growid,)
+                        )
+                        
+                    conn.commit()
+                    
+                    # Update cache
+                    self._cache.pop(f"balance_{old_growid}", None)
+                    self._cache.pop(f"balance_{new_growid}", None)
+                    self._cache.pop(f"growid_{discord_id}", None)
+                    
+                    self.logger.info(f"Updated GrowID for {discord_id}: {old_growid} -> {new_growid}")
+                    return True
+                else:
+                    # If no existing GrowID, just register as new
+                    return await self.register_user(discord_id, new_growid)
+
+            except Exception as e:
+                self.logger.error(f"Error updating GrowID: {e}")
+                if conn:
+                    conn.rollback()
+                return False
+            finally:
+                if conn:
+                    conn.close()
+
     async def get_balance(self, growid: str) -> Optional[Balance]:
         cache_key = f"balance_{growid}"
         
@@ -248,7 +344,6 @@ class BalanceManagerService:
                 if conn:
                     conn.close()
 
-    # Fitur baru: Transfer balance antar user
     async def transfer_balance(self, from_growid: str, to_growid: str, amount: int) -> bool:
         async with await self._get_lock(f"transfer_{from_growid}_{to_growid}"):
             conn = None
