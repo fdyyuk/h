@@ -40,11 +40,7 @@ class LiveStockService:
         }
 
     async def create_stock_embed(self, products: list) -> discord.Embed:
-        cache_key = f"stock_embed_{hash(str(products))}"
-        cached = self._get_cached(cache_key)
-        if cached:
-            return cached
-
+        # Nonaktifkan caching untuk memastikan data selalu fresh
         embed = discord.Embed(
             title="🏪 Store Stock Status",
             color=discord.Color.blue(),
@@ -53,7 +49,13 @@ class LiveStockService:
 
         if products:
             for product in sorted(products, key=lambda x: x['code']):
+                # Force invalidate cache dan ambil data fresh
+                self.product_manager.invalidate_cache(product['code'])
                 stock_count = await self.product_manager.get_stock_count(product['code'])
+                
+                # Tambah logging untuk debugging
+                self.logger.info(f"Live Stock Update - Product: {product['code']}, Stock Count: {stock_count}")
+                
                 value = (
                     f"💎 Code: `{product['code']}`\n"
                     f"📦 Stock: `{stock_count}`\n"
@@ -71,8 +73,6 @@ class LiveStockService:
             embed.description = "No products available."
 
         embed.set_footer(text=f"Last Update: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
-        
-        self._set_cached(cache_key, embed)
         return embed
 
     async def cleanup(self):
