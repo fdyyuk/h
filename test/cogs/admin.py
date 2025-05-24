@@ -312,54 +312,132 @@ class AdminCog(commands.Cog, name="Admin"):
             await ctx.send(f"❌ Error: {str(e)}")
             self.logger.error(f"Error adding balance: {e}")
     
-
-
-    @commands.command(name="reducebal")
-    async def reduce_balance(self, ctx, growid: str, amount: int):
-        """Reduce user's balance
-        Usage: !reducebal <growid> <amount>
-        Example: !reducebal STEVE 100000
+    @commands.command(name='reducestock')
+    async def reduce_stock(self, ctx, code: str, count: int):
         """
-        if not await self._check_admin(ctx):
-            return
-                
+        Reduce stock for a product (Admin only)
+        
+        Usage:
+        !reducestock <code> <count>
+        
+        Example:
+        !reducestock DL 5
+        """
         try:
-            if amount <= 0:
-                await ctx.send("❌ Amount must be positive!")
-                return
-    
-            # Get current balance first
-            current_balance = await self.balance_service.get_balance(growid)
-            if not current_balance:
-                await ctx.send(f"❌ User {growid} not found!")
-                return
+            # Check if count is valid
+            if count <= 0:
+                raise ValueError("Count must be positive")
                 
-            # Make amount negative for reduction
-            wls = -amount
+            # Get product info first
+            product = await self.product_service.get_product(code)
+            if not product:
+                raise ValueError(f"Product {code} not found")
                 
-            new_balance = await self.balance_service.update_balance(
-                growid=growid,
-                wl=wls,
-                details=f"Reduced by admin {ctx.author}",
-                transaction_type=TRANSACTION_ADMIN_REMOVE
+            # Send progress message
+            progress_msg = await ctx.send("⏳ Processing...")
+            
+            # Reduce stock
+            result = await self.product_service.reduce_stock(
+                product_code=code,
+                quantity=count,
+                admin_id=str(ctx.author.id),
+                reason=f"Manual reduction by admin {ctx.author}"
             )
-    
-            embed = discord.Embed(
-                title="✅ Balance Reduced",
-                color=discord.Color.red(),
-                timestamp=datetime.utcnow()
-            )
-            embed.add_field(name="GrowID", value=growid, inline=True)
-            embed.add_field(name="Reduced", value=f"{amount:,} WL", inline=True)
-            embed.add_field(name="New Balance", value=new_balance.format(), inline=False)
-            embed.set_footer(text=f"Reduced by {ctx.author}")
-    
-            await ctx.send(embed=embed)
-            self.logger.info(f"Balance reduced from {growid} by {ctx.author}: -{amount} WL")
+            
+            if result:
+                # Create success embed
+                embed = discord.Embed(
+                    title="✅ Stock Reduced",
+                    color=discord.Color.green(),
+                    timestamp=datetime.utcnow()
+                )
+                embed.add_field(
+                    name="Product", 
+                    value=f"{product['name']} ({code})", 
+                    inline=False
+                )
+                embed.add_field(
+                    name="Reduced Amount", 
+                    value=str(count), 
+                    inline=True
+                )
                 
-        except Exception as e:
+                # Get current stock count
+                current_stock = await self.product_service.get_stock_count(code)
+                embed.add_field(
+                    name="Remaining Stock", 
+                    value=str(current_stock), 
+                    inline=True
+                )
+                
+                embed.set_footer(text=f"Reduced by {ctx.author}")
+                
+                # Delete progress message and send result
+                await progress_msg.delete()
+                await ctx.send(embed=embed)
+                
+                # Log the action
+                self.logger.info(f"Stock reduced for {code} by {ctx.author}: {count} items")
+                
+            else:
+                raise ValueError("Failed to reduce stock")
+                
+        except ValueError as e:
+            await progress_msg.delete()
             await ctx.send(f"❌ Error: {str(e)}")
-            self.logger.error(f"Error reducing balance: {e}")
+            self.logger.error(f"Error reducing stock: {e}")
+            
+        except Exception as e:
+            await progress_msg.delete()
+            await ctx.send("❌ An unexpected error occurred")
+            self.logger.error(f"Error reducing stock: {e}")
+    
+        @commands.command(name="reducebal")
+        async def reduce_balance(self, ctx, growid: str, amount: int):
+            """Reduce user's balance
+            Usage: !reducebal <growid> <amount>
+            Example: !reducebal STEVE 100000
+            """
+            if not await self._check_admin(ctx):
+                return
+                    
+            try:
+                if amount <= 0:
+                    await ctx.send("❌ Amount must be positive!")
+                    return
+        
+                # Get current balance first
+                current_balance = await self.balance_service.get_balance(growid)
+                if not current_balance:
+                    await ctx.send(f"❌ User {growid} not found!")
+                    return
+                    
+                # Make amount negative for reduction
+                wls = -amount
+                    
+                new_balance = await self.balance_service.update_balance(
+                    growid=growid,
+                    wl=wls,
+                    details=f"Reduced by admin {ctx.author}",
+                    transaction_type=TRANSACTION_ADMIN_REMOVE
+                )
+        
+                embed = discord.Embed(
+                    title="✅ Balance Reduced",
+                    color=discord.Color.red(),
+                    timestamp=datetime.utcnow()
+                )
+                embed.add_field(name="GrowID", value=growid, inline=True)
+                embed.add_field(name="Reduced", value=f"{amount:,} WL", inline=True)
+                embed.add_field(name="New Balance", value=new_balance.format(), inline=False)
+                embed.set_footer(text=f"Reduced by {ctx.author}")
+        
+                await ctx.send(embed=embed)
+                self.logger.info(f"Balance reduced from {growid} by {ctx.author}: -{amount} WL")
+                    
+            except Exception as e:
+                await ctx.send(f"❌ Error: {str(e)}")
+                self.logger.error(f"Error reducing balance: {e}")
     
         @commands.command(name='checkbal')
         async def check_balance(self, ctx, growid: str = None):
