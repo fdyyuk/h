@@ -315,7 +315,7 @@ class AdminCog(commands.Cog, name="Admin"):
     @commands.command(name='reducestock')
     async def reduce_stock(self, ctx, code: str, count: int):
         """
-        Reduce stock for a product (Admin only)
+        Reduce stock for a product and send the removed stock to admin's DM
         
         Usage:
         !reducestock <code> <count>
@@ -323,6 +323,9 @@ class AdminCog(commands.Cog, name="Admin"):
         Example:
         !reducestock DL 5
         """
+        if not await self._check_admin(ctx):
+            return
+            
         try:
             # Check if count is valid
             if count <= 0:
@@ -335,16 +338,45 @@ class AdminCog(commands.Cog, name="Admin"):
                 
             # Send progress message
             progress_msg = await ctx.send("⏳ Processing...")
-            
-            # Reduce stock
-            result = await self.product_service.reduce_stock(
-                product_code=code,
-                quantity=count,
-                admin_id=str(ctx.author.id),
-                reason=f"Manual reduction by admin {ctx.author}"
-            )
-            
-            if result:
+    
+            # Get and reduce stock using product service
+            try:
+                # Get available stock items before reduction
+                stock_items = await self.product_service.get_available_stock(code, count)
+                if len(stock_items) < count:
+                    raise ValueError(f"Not enough stock! Only {len(stock_items)} items available")
+    
+                # Reduce stock using service
+                await self.product_service.reduce_stock(
+                    product_code=code,
+                    quantity=count,
+                    admin_id=str(ctx.author.id),
+                    reason="Manual reduction by admin"
+                )
+    
+                # Create stock file
+                stock_file = io.StringIO()
+                current_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                stock_file.write(f"Stock reduction for {product['name']} ({code})\n")
+                stock_file.write(f"Date: {current_time} UTC\n")
+                stock_file.write(f"Reduced by: {ctx.author}\n")
+                stock_file.write("-" * 50 + "\n")
+                for i, item in enumerate(stock_items, 1):
+                    stock_file.write(f"{i}. {item['content']}\n")
+                stock_file.seek(0)
+    
+                # Send file to admin's DM
+                await ctx.author.send(
+                    "Here are the removed stock items:",
+                    file=discord.File(
+                        fp=io.BytesIO(stock_file.getvalue().encode()),
+                        filename=f"stock_reduction_{code}_{current_time.replace(' ', '_')}.txt"
+                    )
+                )
+    
+                # Get current stock count using service
+                current_stock = await self.product_service.get_stock_count(code)
+    
                 # Create success embed
                 embed = discord.Embed(
                     title="✅ Stock Reduced",
@@ -361,9 +393,6 @@ class AdminCog(commands.Cog, name="Admin"):
                     value=str(count), 
                     inline=True
                 )
-                
-                # Get current stock count
-                current_stock = await self.product_service.get_stock_count(code)
                 embed.add_field(
                     name="Remaining Stock", 
                     value=str(current_stock), 
@@ -376,149 +405,313 @@ class AdminCog(commands.Cog, name="Admin"):
                 await progress_msg.delete()
                 await ctx.send(embed=embed)
                 
-                # Log the action
+                # Log using service
+                await self.product_service.log_admin_action(
+                    admin_id=str(ctx.author.id),
+                    action='REDUCE_STOCK',
+                    target=code,
+                    details=f"Reduced {count} items from {product['name']}"
+                )
+                
                 self.logger.info(f"Stock reduced for {code} by {ctx.author}: {count} items")
                 
-            else:
-                raise ValueError("Failed to reduce stock")
-                
+            except Exception as e:
+                raise ValueError(str(e))
+                    
         except ValueError as e:
-            await progress_msg.delete()
+            if 'progress_msg' in locals():
+                await progress_msg.delete()
             await ctx.send(f"❌ Error: {str(e)}")
             self.logger.error(f"Error reducing stock: {e}")
             
         except Exception as e:
-            await progress_msg.delete()
+            if 'progress_msg' in locals():
+                await progress_msg.delete()
             await ctx.send("❌ An unexpected error occurred")
             self.logger.error(f"Error reducing stock: {e}")
     
-        @commands.command(name="reducebal")
-        async def reduce_balance(self, ctx, growid: str, amount: int):
-            """Reduce user's balance
-            Usage: !reducebal <growid> <amount>
-            Example: !reducebal STEVE 100000
-            """
-            if not await self._check_admin(ctx):
+    @commands.command(name='checkbal')
+    async def check_balance(self, ctx, growid: str = None):
+        """Check balance dari user
+        Usage: !checkbal <growid>
+        Example: !checkbal STEVE
+        """
+        if not await self._check_admin(ctx):
+            return
+                
+        try:
+            if not growid:
+                await ctx.send("❌ Please specify a GrowID!")
                 return
-                    
-            try:
-                if amount <= 0:
-                    await ctx.send("❌ Amount must be positive!")
-                    return
-        
-                # Get current balance first
-                current_balance = await self.balance_service.get_balance(growid)
-                if not current_balance:
-                    await ctx.send(f"❌ User {growid} not found!")
-                    return
-                    
-                # Make amount negative for reduction
-                wls = -amount
-                    
-                new_balance = await self.balance_service.update_balance(
-                    growid=growid,
-                    wl=wls,
-                    details=f"Reduced by admin {ctx.author}",
-                    transaction_type=TRANSACTION_ADMIN_REMOVE
+    
+            # Get user data using balance service
+            user_data = await self.balance_service.get_user_data(growid)
+            if not user_data:
+                await ctx.send(f"❌ No user found with GrowID: {growid}")
+                return
+    
+            # Get balance using balance service
+            balance = await self.balance_service.get_balance(growid)
+            if not balance:
+                await ctx.send(f"❌ No balance found for GrowID: {growid}")
+                return
+    
+            # Create embed
+            embed = discord.Embed(
+                title="💰 Balance Information",
+                color=discord.Color.blue(),
+                timestamp=datetime.utcnow()
+            )
+            
+            # User info
+            embed.add_field(
+                name="GrowID", 
+                value=growid, 
+                inline=True
+            )
+            if user_data.get('discord_id'):
+                embed.add_field(
+                    name="Discord", 
+                    value=f"<@{user_data['discord_id']}>", 
+                    inline=True
                 )
-        
+    
+            # Balance info
+            total_wls = (balance.wl + (balance.dl * 100) + (balance.bgl * 10000))
+            balance_text = []
+            if balance.bgl > 0:
+                balance_text.append(f"{balance.bgl:,} BGL")
+            if balance.dl > 0:
+                balance_text.append(f"{balance.dl:,} DL")
+            if balance.wl > 0:
+                balance_text.append(f"{balance.wl:,} WL")
+            
+            embed.add_field(
+                name="Balance", 
+                value=f"{' + '.join(balance_text) if balance_text else '0 WL'}\nTotal: {total_wls:,} WL", 
+                inline=False
+            )
+    
+            # Get transaction stats using transaction manager
+            stats = await self.trx_manager.get_user_stats(growid)
+            if stats:
+                stats_text = [
+                    f"Total Transactions: {stats['total_trx']:,}",
+                    f"Total Spent: {stats['total_spent']:,} WL" if stats['total_spent'] else "Total Spent: 0 WL",
+                    f"Last Transaction: {stats['last_trx']}" if stats['last_trx'] else "No transactions yet"
+                ]
+                
+                embed.add_field(
+                    name="Stats", 
+                    value="\n".join(stats_text), 
+                    inline=False
+                )
+    
+            # Get recent transactions using transaction manager
+            transactions = await self.trx_manager.get_user_transactions(growid, 5)
+            if transactions:
+                trx_text = []
+                for trx in transactions:
+                    price_text = f"{trx['total_price']:,} WL" if trx['total_price'] else "N/A"
+                    trx_text.append(
+                        f"• {trx['created_at']} - {trx['type']}\n"
+                        f"  Price: {price_text}\n"
+                        f"  Details: {trx['details']}"
+                    )
+                
+                embed.add_field(
+                    name="Recent Transactions",
+                    value="\n".join(trx_text),
+                    inline=False
+                )
+    
+            embed.set_footer(text=f"Checked by {ctx.author} • Account created: {user_data['created_at']}")
+            
+            await ctx.send(embed=embed)
+    
+        except Exception as e:
+            self.logger.error(f"Error checking balance: {e}")
+            await ctx.send(f"❌ Error checking balance: {str(e)}")
+            
+    @commands.command(name="changeprice")
+    async def change_price(self, ctx, code: str, new_price: int):
+        """Change product price
+        Usage: !changeprice <code> <new_price>
+        Example: !changeprice DL1 100000
+        """
+        if not await self._check_admin(ctx):
+            return
+                
+        try:
+            # Verify product exists
+            product = await self.product_service.get_product(code)
+            if not product:
+                await ctx.send(f"❌ Product with code `{code}` not found!")
+                return
+    
+            # Validate price
+            if new_price <= 0:
+                await ctx.send("❌ Price must be positive!")
+                return
+    
+            # Update price
+            success = await self.product_service.update_product(code, {'price': new_price})
+            if success:
                 embed = discord.Embed(
-                    title="✅ Balance Reduced",
-                    color=discord.Color.red(),
+                    title="✅ Price Updated",
+                    color=discord.Color.green(),
                     timestamp=datetime.utcnow()
                 )
-                embed.add_field(name="GrowID", value=growid, inline=True)
-                embed.add_field(name="Reduced", value=f"{amount:,} WL", inline=True)
-                embed.add_field(name="New Balance", value=new_balance.format(), inline=False)
-                embed.set_footer(text=f"Reduced by {ctx.author}")
-        
-                await ctx.send(embed=embed)
-                self.logger.info(f"Balance reduced from {growid} by {ctx.author}: -{amount} WL")
-                    
-            except Exception as e:
-                await ctx.send(f"❌ Error: {str(e)}")
-                self.logger.error(f"Error reducing balance: {e}")
-    
-        @commands.command(name='checkbal')
-        async def check_balance(self, ctx, growid: str = None):
-            """Check balance dari user
-            Usage: !checkbal <growid>
-            Example: !checkbal STEVE
-            """
-            if not await self._check_admin(ctx):
-                return
-                    
-            try:
-                if not growid:
-                    await ctx.send("❌ Please specify a GrowID!")
-                    return
-        
-                # Get balance
-                balance = await self.balance_service.get_balance(growid)
-                if not balance:
-                    await ctx.send(f"❌ No balance found for GrowID: {growid}")
-                    return
-        
-                # Create embed
-                embed = discord.Embed(
-                    title="💰 Balance Information",
-                    color=discord.Color.blue(),
-                    timestamp=datetime.utcnow()  # Gunakan datetime.utcnow() untuk timestamp
-                )
-                
-                embed.add_field(name="GrowID", value=growid, inline=False)
-                embed.add_field(name="Balance", value=balance.format(), inline=False)
-                embed.set_footer(text=f"Checked by {ctx.author}")
+                embed.add_field(name="Product", value=f"{product['name']} ({code})", inline=False)
+                embed.add_field(name="Old Price", value=f"{product['price']:,} WL", inline=True)
+                embed.add_field(name="New Price", value=f"{new_price:,} WL", inline=True)
+                embed.set_footer(text=f"Updated by {ctx.author}")
                 
                 await ctx.send(embed=embed)
-        
-            except Exception as e:
-                self.logger.error(f"Error checking balance: {e}")
-                await ctx.send("❌ An error occurred while checking balance!")
-    
-        @commands.command(name="resetuser")
-        async def reset_user(self, ctx, growid: str):
-            """Reset user balance"""
-            if not await self._check_admin(ctx):
-                return
-    
-            try:
-                if not await self._confirm_action(ctx, f"Are you sure you want to reset {growid}'s balance?"):
-                    await ctx.send("❌ Operation cancelled.")
-                    return
-    
-                current_balance = await self.balance_service.get_balance(growid)  # Removed ()
-                if not current_balance:
-                    await ctx.send(f"❌ User {growid} not found!")
-                    return
-    
-                # Reset balance
-                new_balance = await self.balance_service.update_balance(
-                    growid=growid,
-                    wl=-current_balance.wl,
-                    dl=-current_balance.dl,
-                    bgl=-current_balance.bgl,
-                    details=f"Balance reset by admin {ctx.author}",
-                    transaction_type=TRANSACTION_ADMIN_RESET
-                )
-    
-                embed = discord.Embed(
-                    title="✅ Balance Reset",
-                    description=f"User {growid}'s balance has been reset.",
-                    color=discord.Color.red(),
-                    timestamp=datetime.utcnow()
-                )
-                embed.add_field(name="Previous Balance", value=current_balance.format(), inline=False)
-                embed.add_field(name="New Balance", value=new_balance.format(), inline=False)
-                embed.set_footer(text=f"Reset by {ctx.author}")
-    
-                await ctx.send(embed=embed)
-                self.logger.info(f"Balance reset for {growid} by {ctx.author}")
+                self.logger.info(f"Product {code} price changed by {ctx.author}: {product['price']} -> {new_price}")
+            else:
+                await ctx.send(f"❌ Failed to update price for {code}")
                 
-            except Exception as e:
-                await ctx.send(f"❌ Error: {str(e)}")
-                self.logger.error(f"Error resetting user: {e}")
+        except Exception as e:
+            await ctx.send(f"❌ Error: {str(e)}")
+            self.logger.error(f"Error changing price: {e}")
 
+    @commands.command(name="deleteproduct")
+    async def delete_product(self, ctx, code: str):
+        """Delete a product
+        Usage: !deleteproduct <code>
+        Example: !deleteproduct DL1
+        """
+        if not await self._check_admin(ctx):
+            return
+                
+        try:
+            # Verify product exists
+            product = await self.product_service.get_product(code)
+            if not product:
+                await ctx.send(f"❌ Product with code `{code}` not found!")
+                return
+    
+            # Confirm deletion
+            if not await self._confirm_action(ctx, f"Are you sure you want to delete product {code} ({product['name']})?"):
+                await ctx.send("❌ Operation cancelled.")
+                return
+    
+            # Delete product
+            success = await self.product_service.delete_product(code)
+            if success:
+                embed = discord.Embed(
+                    title="✅ Product Deleted",
+                    color=discord.Color.red(),
+                    timestamp=datetime.utcnow()
+                )
+                embed.add_field(name="Code", value=code, inline=True)
+                embed.add_field(name="Name", value=product['name'], inline=True)
+                embed.set_footer(text=f"Deleted by {ctx.author}")
+                
+                await ctx.send(embed=embed)
+                self.logger.info(f"Product {code} deleted by {ctx.author}")
+            else:
+                await ctx.send(f"❌ Failed to delete product {code}")
+                
+        except Exception as e:
+            await ctx.send(f"❌ Error: {str(e)}")
+            self.logger.error(f"Error deleting product: {e}")
+
+    @commands.command(name="reducebal")
+    async def reduce_balance(self, ctx, growid: str, amount: int = None):
+        """Reduce user's balance
+        Usage: !reducebal <growid> <amount>
+        Example: !reducebal STEVE 100000
+        """
+        if not await self._check_admin(ctx):
+            return
+                
+        try:
+            # Cek jika amount tidak diberikan
+            if amount is None:
+                await ctx.send("❌ Please specify the amount!\nUsage: !reducebal <growid> <amount>")
+                return
+    
+            if amount <= 0:
+                await ctx.send("❌ Amount must be positive!")
+                return
+    
+            # Get current balance first
+            current_balance = await self.balance_service.get_balance(growid)
+            if not current_balance:
+                await ctx.send(f"❌ User {growid} not found!")
+                return
+                
+            # Make amount negative for reduction
+            wls = -amount
+                
+            new_balance = await self.balance_service.update_balance(
+                growid=growid,
+                wl=wls,
+                details=f"Reduced by admin {ctx.author}",
+                transaction_type=TRANSACTION_ADMIN_REMOVE
+            )
+    
+            embed = discord.Embed(
+                title="✅ Balance Reduced",
+                color=discord.Color.red(),
+                timestamp=datetime.utcnow()
+            )
+            embed.add_field(name="GrowID", value=growid, inline=True)
+            embed.add_field(name="Reduced", value=f"{amount:,} WL", inline=True)
+            embed.add_field(name="New Balance", value=f"{new_balance:,} WL", inline=False)
+            embed.set_footer(text=f"Reduced by {ctx.author}")
+    
+            await ctx.send(embed=embed)
+            self.logger.info(f"Balance reduced from {growid} by {ctx.author}: -{amount} WL")
+                
+        except Exception as e:
+            await ctx.send(f"❌ Error: {str(e)}")
+            self.logger.error(f"Error reducing balance: {e}")
+        
+    @commands.command(name="trxhistory")
+    async def transaction_history(self, ctx, growid: str, limit: int = 10):
+        """View transaction history for a user
+        Usage: !trxhistory <growid> [limit]
+        Example: !trxhistory STEVE 5
+        """
+        if not await self._check_admin(ctx):
+            return
+    
+        try:
+            # Get transaction history
+            history = await self.trx_manager.get_user_transactions(growid, limit)
+            if not history:
+                await ctx.send(f"❌ No transactions found for {growid}")
+                return
+    
+            embed = discord.Embed(
+                title=f"📜 Transaction History - {growid}",
+                color=discord.Color.blue(),
+                timestamp=datetime.utcnow()
+            )
+    
+            for trx in history:
+                value = (
+                    f"Type: {trx['type']}\n"
+                    f"Amount: {trx['amount']:,} WL\n"
+                    f"Details: {trx['details']}\n"
+                    f"Date: {trx['created_at']}"
+                )
+                embed.add_field(
+                    name=f"Transaction #{trx['id']}", 
+                    value=value, 
+                    inline=False
+                )
+    
+            embed.set_footer(text=f"Showing last {len(history)} transactions")
+            await ctx.send(embed=embed)
+            
+        except Exception as e:
+            await ctx.send(f"❌ Error: {str(e)}")
+            self.logger.error(f"Error getting transaction history: {e}")
+        
     @commands.command(name="systeminfo")
     async def system_info(self, ctx):
         """Show bot system information"""
