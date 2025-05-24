@@ -97,7 +97,6 @@ class ProductManagerService:
                 if conn:
                     conn.close()
 
-    # New method: Edit product
     async def edit_product(self, code: str, field: str, value: any) -> bool:
         async with await self._get_lock(f"product_{code}"):
             conn = None
@@ -139,7 +138,6 @@ class ProductManagerService:
                 if conn:
                     conn.close()
 
-    # New method: Delete product
     async def delete_product(self, code: str) -> bool:
         async with await self._get_lock(f"product_{code}"):
             conn = None
@@ -247,6 +245,13 @@ class ProductManagerService:
                 if not cursor.fetchone():
                     raise ValueError(f"Product {product_code} not found")
                 
+                # Check if content already exists
+                cursor.execute("SELECT id FROM stock WHERE content = ? AND status = ?", 
+                             (content.strip(), STATUS_AVAILABLE))
+                if cursor.fetchone():
+                    self.logger.warning(f"Stock content already exists and available: {content}")
+                    return False
+                
                 cursor.execute(
                     """
                     INSERT INTO stock (product_code, content, added_by, status, added_at)
@@ -257,7 +262,7 @@ class ProductManagerService:
                 
                 conn.commit()
                 
-                # Invalidate stock count cache
+                # Force invalidate cache
                 self._cache.pop(f"stock_count_{product_code}", None)
                 self._cache.pop("all_products", None)
                 
@@ -372,6 +377,27 @@ class ProductManagerService:
                 if conn:
                     conn.close()
 
+    async def get_stock_history(self, product_code: str, limit: int = 10) -> List[Dict]:
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT * FROM stock 
+                WHERE product_code = ?
+                ORDER BY updated_at DESC
+                LIMIT ?
+            """, (product_code, limit))
+            
+            return [dict(row) for row in cursor.fetchall()]
+
+        except Exception as e:
+            self.logger.error(f"Error getting stock history: {e}")
+            return []
+        finally:
+            if conn:
+                conn.close()
+
     async def get_world_info(self) -> Optional[Dict]:
         cached = self._get_cached("world_info")
         if cached:
@@ -422,6 +448,68 @@ class ProductManagerService:
 
             except Exception as e:
                 self.logger.error(f"Error updating world info: {e}")
+                if conn:
+                    conn.rollback()
+                return False
+            finally:
+                if conn:
+                    conn.close()
+    # Tambahkan method baru di class ProductManagerService
+    async def reduce_stock(self, product_code: str, quantity: int, admin_id: str, reason: str = None) -> bool:
+        """
+        Reduce stock quantity for a product (Admin only)
+        """
+        if quantity <= 0:
+            raise ValueError("Quantity must be positive")
+                
+        async with await self._get_lock(f"stock_{product_code}"):
+            conn = None
+            try:
+                conn = get_connection()
+                cursor = conn.cursor()
+                
+                # Get available stock items
+                cursor.execute("""
+                    SELECT id 
+                    FROM stock 
+                    WHERE product_code = ? AND status = ?
+                    ORDER BY added_at DESC
+                    LIMIT ?
+                """, (product_code, STATUS_AVAILABLE, quantity))
+                
+                stock_items = cursor.fetchall()
+                if len(stock_items) < quantity:
+                    raise ValueError(f"Insufficient stock. Only {len(stock_items)} available.")
+                
+                # Update stock status to removed
+                stock_ids = [item['id'] for item in stock_items]
+                cursor.execute(f"""
+                    UPDATE stock 
+                    SET status = 'REMOVED', updated_at = CURRENT_TIMESTAMP
+                    WHERE id IN ({','.join('?' * len(stock_ids))})
+                """, stock_ids)
+                
+                # Log admin action
+                cursor.execute("""
+                    INSERT INTO admin_logs (admin_id, action, target, details)
+                    VALUES (?, 'REDUCE_STOCK', ?, ?)
+                """, (
+                    admin_id,
+                    product_code,
+                    f"Reduced {quantity} stock(s). Reason: {reason if reason else 'Not specified'}"
+                ))
+                
+                conn.commit()
+                
+                # Invalidate cache
+                self._cache.pop(f"stock_count_{product_code}", None)
+                self._cache.pop("all_products", None)
+                
+                self.logger.info(f"Admin {admin_id} reduced {quantity} stock(s) from {product_code}")
+                return True
+    
+            except Exception as e:
+                self.logger.error(f"Error reducing stock: {e}")
                 if conn:
                     conn.rollback()
                 return False
